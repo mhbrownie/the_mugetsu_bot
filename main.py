@@ -9,7 +9,7 @@ from telethon.errors import TypeNotFoundError
 from contextlib import asynccontextmanager
 import httpx
 
-# Load env vars
+# Load environment variables
 load_dotenv()
 
 API_ID = int(os.getenv("API_ID"))
@@ -18,6 +18,7 @@ SESSION_NAME = os.getenv("SESSION_NAME", "anon")
 GROUP_ID_RAW = os.getenv("GROUP_ID")
 GROUP_ID = int(GROUP_ID_RAW) if GROUP_ID_RAW.startswith("-") or GROUP_ID_RAW.isdigit() else GROUP_ID_RAW
 
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
@@ -37,7 +38,7 @@ async def send_token(
     callback_url: str = Query(...),
     background_tasks: BackgroundTasks = None
 ):
-    message_text = token_id
+    message_text = f"/top {token_id}"
     logging.info(f"📨 Sending message: {message_text}")
 
     try:
@@ -47,7 +48,6 @@ async def send_token(
         logging.error(f"❌ Error sending message: {e}")
         return {"status": "error", "details": str(e)}
 
-    # Queue the background task
     background_tasks.add_task(wait_and_callback, msg, token_id, callback_url)
     return {"status": "queued", "token_id": token_id}
 
@@ -58,7 +58,7 @@ async def wait_and_callback(original_message, token_id, callback_url, timeout=24
     }
 
     try:
-        result = await wait_for_reply_and_click(original_message, timeout)
+        result = await wait_for_reply(original_message, timeout)
 
         if "error" in result:
             payload["status"] = "timeout"
@@ -78,79 +78,56 @@ async def wait_and_callback(original_message, token_id, callback_url, timeout=24
     except Exception as e:
         logging.error(f"❌ Failed to send callback: {e}")
 
-async def wait_for_reply_and_click(original_message, timeout=180):
+async def wait_for_reply(original_message, timeout=180):
     loop = asyncio.get_event_loop()
     future = loop.create_future()
 
-    async def first_reply_handler(event):
+    async def reply_handler(event):
         if event.is_reply and event.reply_to_msg_id == original_message.id:
-            client.remove_event_handler(first_reply_handler, events.NewMessage(chats=GROUP_ID))
-            first_reply = event.message
-            logging.info(f"💬 First reply:\n{first_reply.message}")
+            client.remove_event_handler(reply_handler, events.NewMessage(chats=GROUP_ID))
+            reply = event.message
+            logging.info(f"💬 Received reply:\n{reply.message}")
 
-            all_buttons = [btn for row in (first_reply.buttons or []) for btn in row]
-            logging.info(f"🔘 Found {len(all_buttons)} buttons in reply")
+            if not future.done():
+                result = extract_top_holders(reply.message)
+                future.set_result(result)
 
-            if len(all_buttons) >= 3:
-                try:
-                    await first_reply.click(2)
-                    logging.info("🖱️ Clicked 3rd button — waiting for second reply...")
-
-                    async def second_reply_handler(event2):
-                        if event2.is_reply and event2.reply_to_msg_id == first_reply.id:
-                            client.remove_event_handler(second_reply_handler, events.NewMessage(chats=GROUP_ID))
-                            second_reply = event2.message
-                            logging.info(f"🔁 Reply to button click:\n{second_reply.message}")
-                            if not future.done():
-                                result = extract_wallet_metrics(second_reply.message)
-                                future.set_result(result)
-
-                    client.add_event_handler(second_reply_handler, events.NewMessage(chats=GROUP_ID))
-                except Exception as e:
-                    logging.error(f"❌ Error clicking 3rd button: {e}")
-                    if not future.done():
-                        result = extract_wallet_metrics(first_reply.message)
-                        future.set_result(result)
-            else:
-                if not future.done():
-                    result = extract_wallet_metrics(first_reply.message)
-                    future.set_result(result)
-
-    client.add_event_handler(first_reply_handler, events.NewMessage(chats=GROUP_ID))
+    client.add_event_handler(reply_handler, events.NewMessage(chats=GROUP_ID))
 
     try:
         return await asyncio.wait_for(future, timeout)
     except asyncio.TimeoutError:
-        client.remove_event_handler(first_reply_handler, events.NewMessage(chats=GROUP_ID))
-        return {"error": "Timed out waiting for second reply"}
+        client.remove_event_handler(reply_handler, events.NewMessage(chats=GROUP_ID))
+        return {"error": "Timed out waiting for reply"}
 
-
-def extract_wallet_metrics(text: str):
-    metrics = {
+def extract_top_holders(text: str):
+    result = {
         "raw": text,
-        "jeets": {"count": "", "percent": ""},
-        "chads": {"count": "", "percent": ""},
-        "fresh_wallets": {"count": "", "percent": ""}
+        "top_holder_summary": "",
+        "noteworthy_holders": []
     }
 
-    jeets = re.search(r"\b(\d+)\s+Jeets?\s+\(([\d.]+)%", text, re.IGNORECASE)
-    chads = re.search(r"\b(\d+)\s+Chads?\s+\(([\d.]+)%", text, re.IGNORECASE)
-    fresh = re.search(r"\b(\d+)\s+Fresh Wallets?\s+\(([\d.]+)%", text, re.IGNORECASE)
+    # Match "3/35 top holders"
+    summary_match = re.search(r"(\d+/\d+)\s+top holders", text, re.IGNORECASE)
+    if summary_match:
+        result["top_holder_summary"] = summary_match.group(1)
 
-    if jeets:
-        metrics["jeets"] = {
-            "count": int(jeets.group(1)),
-            "percent": float(jeets.group(2)) / 100
-        }
-    if chads:
-        metrics["chads"] = {
-            "count": int(chads.group(1)),
-            "percent": float(chads.group(2)) / 100
-        }
-    if fresh:
-        metrics["fresh_wallets"] = {
-            "count": int(fresh.group(1)),
-            "percent": float(fresh.group(2)) / 100
-        }
+    # Match lines like: "#2 (427 SOL) (...) | ⚠️ NAME ($226.6K)"
+    holder_lines = re.findall(
+        r"#(\d+)\s+\(([\d.]+)\s+SOL\).*?\|\s+.*?([A-Za-z0-9]+)\s+\(\$([\d.,]+)[kK]?\)",
+        text
+    )
 
-    return metrics
+    for rank, sol, name, value in holder_lines:
+        try:
+            dollar_value = float(value.replace(",", ""))
+            result["noteworthy_holders"].append({
+                "rank": int(rank),
+                "sol": float(sol),
+                "name": name,
+                "value": dollar_value
+            })
+        except Exception as e:
+            logging.warning(f"⚠️ Failed to parse one holder entry: {e}")
+
+    return result
