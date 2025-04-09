@@ -80,10 +80,12 @@ async def wait_and_callback(original_message, token_id, callback_url, timeout=24
 
 import datetime
 
+import datetime
+
 async def wait_for_reply(original_message, timeout=180):
     loop = asyncio.get_event_loop()
     future = loop.create_future()
-    start_time = datetime.datetime.utcnow()
+    start_time = datetime.datetime.now(datetime.timezone.utc)
 
     logging.info(f"🕐 Listening for reply after: {start_time.isoformat()}")
     logging.info(f"🧵 Waiting for message in chat ID: {original_message.chat_id}")
@@ -100,7 +102,6 @@ async def wait_for_reply(original_message, timeout=180):
         logging.info(f"    Timestamp: {msg_time.isoformat()}")
         logging.info(f"    Text:\n{msg_text}")
 
-        # Check for time and chat match
         if event.chat_id == original_message.chat_id and msg_time >= start_time:
             logging.info("✅ Message matches expected time and chat. Parsing...")
             client.remove_event_handler(reply_handler, events.NewMessage(chats=GROUP_ID))
@@ -119,6 +120,7 @@ async def wait_for_reply(original_message, timeout=180):
         client.remove_event_handler(reply_handler, events.NewMessage(chats=GROUP_ID))
         logging.warning("⏱️ Timeout: no reply received in time window.")
         return {"error": "Timed out waiting for reply"}
+
 
 
 def extract_top_holders(text: str):
