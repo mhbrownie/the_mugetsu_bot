@@ -78,19 +78,38 @@ async def wait_and_callback(original_message, token_id, callback_url, timeout=24
     except Exception as e:
         logging.error(f"❌ Failed to send callback: {e}")
 
+import datetime
+
 async def wait_for_reply(original_message, timeout=180):
     loop = asyncio.get_event_loop()
     future = loop.create_future()
+    start_time = datetime.datetime.utcnow()
+
+    logging.info(f"🕐 Listening for reply after: {start_time.isoformat()}")
+    logging.info(f"🧵 Waiting for message in chat ID: {original_message.chat_id}")
 
     async def reply_handler(event):
-        if event.is_reply and event.reply_to_msg_id == original_message.id:
+        msg = event.message
+        msg_time = msg.date
+        msg_sender = msg.sender_id
+        msg_text = msg.message
+
+        logging.info("📥 Incoming message detected:")
+        logging.info(f"    From chat: {event.chat_id}")
+        logging.info(f"    Sender ID: {msg_sender}")
+        logging.info(f"    Timestamp: {msg_time.isoformat()}")
+        logging.info(f"    Text:\n{msg_text}")
+
+        # Check for time and chat match
+        if event.chat_id == original_message.chat_id and msg_time >= start_time:
+            logging.info("✅ Message matches expected time and chat. Parsing...")
             client.remove_event_handler(reply_handler, events.NewMessage(chats=GROUP_ID))
-            reply = event.message
-            logging.info(f"💬 Received reply:\n{reply.message}")
 
             if not future.done():
-                result = extract_top_holders(reply.message)
+                result = extract_top_holders(msg_text)
                 future.set_result(result)
+        else:
+            logging.info("❌ Message ignored (not from expected chat or too early)")
 
     client.add_event_handler(reply_handler, events.NewMessage(chats=GROUP_ID))
 
@@ -98,7 +117,9 @@ async def wait_for_reply(original_message, timeout=180):
         return await asyncio.wait_for(future, timeout)
     except asyncio.TimeoutError:
         client.remove_event_handler(reply_handler, events.NewMessage(chats=GROUP_ID))
+        logging.warning("⏱️ Timeout: no reply received in time window.")
         return {"error": "Timed out waiting for reply"}
+
 
 def extract_top_holders(text: str):
     result = {
