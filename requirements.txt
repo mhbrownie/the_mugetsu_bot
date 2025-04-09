@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+telethon>=1.39.0
+python-dotenv
+httpx
