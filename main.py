@@ -127,7 +127,13 @@ def extract_top_holders(text: str):
     result = {
         "raw": text,
         "top_holder_summary": "",
-        "noteworthy_holders": []
+        "noteworthy_holders": [],
+        "top1_name": "",
+        "top1_value": "",
+        "top2_name": "",
+        "top2_value": "",
+        "top3_name": "",
+        "top3_value": ""
     }
 
     # Match "3/35 top holders"
@@ -141,16 +147,30 @@ def extract_top_holders(text: str):
         text
     )
 
-    for rank, sol, name, value in holder_lines:
+    for index, (rank, sol, name, value) in enumerate(holder_lines):
         try:
             dollar_value = float(value.replace(",", ""))
-            result["noteworthy_holders"].append({
+            holder_data = {
                 "rank": int(rank),
                 "sol": float(sol),
                 "name": name,
                 "value": dollar_value
-            })
+            }
+            result["noteworthy_holders"].append(holder_data)
+
+            # Flatten top 3
+            if index == 0:
+                result["top1_name"] = name
+                result["top1_value"] = dollar_value
+            elif index == 1:
+                result["top2_name"] = name
+                result["top2_value"] = dollar_value
+            elif index == 2:
+                result["top3_name"] = name
+                result["top3_value"] = dollar_value
+
         except Exception as e:
             logging.warning(f"⚠️ Failed to parse one holder entry: {e}")
 
     return result
+
